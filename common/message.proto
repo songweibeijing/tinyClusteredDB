@@ -1,0 +1,23 @@
+message Request
+{
+    message Field {
+        required string name = 1;
+        required string value = 2;
+    }
+    required string tablename = 1;
+    repeated Field fields = 2;
+}
+
+message Response
+{
+    message Field {
+        required string name = 1;
+        required string value = 2;
+    }
+    message Record {
+        repeated Field fields = 1;
+    }
+
+    required string tablename = 1;
+    repeated Record records = 2;
+}
