@@ -24,6 +24,10 @@ using namespace std;
         }\
     }while(0)
 
+#define INDEX_SUFFIX ".idx"
+#define DATA_SUFFIX ".dat"
+#define TMP_SUFFIX ".tmp"
+
 typedef struct count
 {
     uint32_t start_pos;
@@ -63,6 +67,7 @@ typedef struct field
     enum fieldtype type;
     int max_length;
     int index; //start from 0
+    int is_index;
 } field;
 
 typedef struct scheme
@@ -79,6 +84,7 @@ typedef struct table
 
     uint32_t  file_linenum;
     uint32_t  index_num;
+    uint32_t  field_num;
 
     string table_path;
     string scheme_path;
@@ -99,11 +105,11 @@ typedef struct index_builder
 
     string_unique str_filter;
 
-    uint32_t record_count_num;
     intCounthashMap *record_count_map;
 
     char *record;
     uint32_t rec_size;
+    
     uint32_t *size_map;
 
     char *record_index;

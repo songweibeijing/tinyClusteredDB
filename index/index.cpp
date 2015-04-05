@@ -14,7 +14,6 @@
 int g_size[10];
 
 static int init_string_unique(string_unique *su);
-static int get_max_record_size(table *tab);
 static void free_string_unique(string_unique *su);
 static int get_incr_rank_pos(string key, intCounthashMap &map);
 static int output_index_and_data(index_builder *builder, int idxnm);
@@ -24,9 +23,9 @@ static int gen_indexs_for_tables(config *tconfig);
 void usage()
 {
     printf("The Tool is used to build index for clusterDB.\n");
-    printf("index [-F-h]\n");
+    printf("index [-f-h]\n");
     printf("\t-h\t print usage\n");
-    printf("\t-F\t the configuration file\n");
+    printf("\t-f\t the configuration file\n");
 }
 
 int init_index_builder(index_builder *index, table *tab)
@@ -59,8 +58,8 @@ int init_index_builder(index_builder *index, table *tab)
         return -1;
     }
 
-    size_map = (uint32_t *) calloc(tab->index_num, sizeof(uint32_t));
-    if (!size_map)
+    size_map = (uint32_t *) calloc(tab->field_num, sizeof(uint32_t));
+    if (size_map==NULL)
     {
         goto failed;
     }
@@ -75,7 +74,7 @@ int init_index_builder(index_builder *index, table *tab)
         }
         else if (it->type == STRING)
         {
-            tmp = sizeof(index);
+            tmp = sizeof(posindex);
         }
         else if (it->type == FLOAT)
         {
@@ -122,7 +121,8 @@ int init_index_builder(index_builder *index, table *tab)
     index->rec_index_size = rec_size_index;
     index->size_map = size_map;
     index->pRank = pRank;
-
+    index->record_count_map = new intCounthashMap[tab->index_num]; 
+  
     return 0;
 
 failed:
@@ -141,24 +141,18 @@ failed:
 
 void free_index_builder(index_builder *index)
 {
-    int i = 0;
-
     if (index->pRank)
     {
         for (int j = 0; j < (int)index->tab->index_num; j++)
         {
             my_free(index->pRank[j]);
         }
+        my_free(index->pRank);
     }
-    my_free(index->pRank);
-    my_free(index->record);
     my_free(index->size_map);
+    my_free(index->record);
     my_free(index->record_index);
     free_string_unique(&index->str_filter);
-    for (i = 0; i < (int)index->record_count_num; i++)
-    {
-        index->record_count_map[i].clear();
-    }
     delete [] index->record_count_map;
 }
 
@@ -209,37 +203,6 @@ int init_type_size()
     return 0;
 }
 
-int get_max_record_size(table *tab)
-{
-    int rec_size = 0, tmp = 0;
-    vector<field> *p = &tab->table_scheme.vFields;
-    for (vector<field>::iterator it = p->begin(); it != p->end(); it++)
-    {
-        if (it->type == INT)
-        {
-            tmp = sizeof(uint32_t);
-        }
-        else if (it->type == STRING)
-        {
-            tmp = it->max_length;
-        }
-        else if (it->type == FLOAT)
-        {
-            tmp = sizeof(float);
-        }
-        else if (it->type == DOUBLE)
-        {
-            tmp = sizeof(double);
-        }
-        else
-        {
-            return -1;
-        }
-        rec_size += tmp;
-    }
-    return rec_size;
-}
-
 char *add_data(char *record, int type, string key, posindex pos)
 {
     if (type == INT)
@@ -283,6 +246,7 @@ int create_index(index_builder *builder)
     scheme *pscheme = &tab->table_scheme;
     int nLines = tab->file_linenum;
     int nIndex = tab->index_num;
+    int nField = tab->table_scheme.vFields.size();
     int maxIndex = -1, i = 0;
     field ftype;
     string key, line;
@@ -304,24 +268,34 @@ int create_index(index_builder *builder)
         }
     }
 
+    printf("Function %s, lines %d, nIndex %d, maxIndex %d\n", __FUNCTION__, nLines, nIndex, maxIndex);
+
     i = 0;
     char *record_index = builder->record_index;
     while (getline(in, line))
     {
-        vector<string> tokens = parse_string(line, pscheme->sep);
+	vector<string> tokens = parse_string(line, pscheme->sep);
         if (tokens.size() == 0 || (int)tokens.size() < maxIndex + 1)
         {
             cerr << "wrong input " << line << endl;
             continue;
         }
+	for(vector<string>::iterator sit=tokens.begin(); sit!=tokens.end(); sit++)
+	{
+	    *sit = trim_head_tail(*sit, " \t\r\n");
+	}
 
-        for (int i = 0; i < nIndex; i++)
+        for (int i = 0; i < nField; i++)
         {
-            posindex pos = { 0, 0};
-            ftype = pscheme->vIndexs[i];
-            key = tokens[pscheme->vIndexs[i].index];
+            field ftype = pscheme->vFields[i];
+	    posindex pos = {0, 0};
+            string key = tokens[i];
             md5 = get_md5(key);
-            pidxmap[i][md5].length++;
+
+            if(ftype.is_index)
+            {
+                pidxmap[i][md5].length++;
+            }
 
             if (ftype.type == STRING)
             {
@@ -350,11 +324,11 @@ int create_index(index_builder *builder)
             continue;
         }
 
-        for (; it != pidxmap[i].end(); it++)
+        for (; it != pidxmap[i].end(); it++, it_prev++)
         {
             it->second.start_pos += it_prev->second.start_pos + it_prev->second.length;
-            it_prev->second.rank_pos = it->second.start_pos;
-        }
+            it->second.rank_pos = it->second.start_pos;
+	}
     }
 
     in.open(file);
@@ -372,14 +346,18 @@ int create_index(index_builder *builder)
             cerr << "wrong input " << line << endl;
             continue;
         }
-
+        for(vector<string>::iterator sit=tokens.begin(); sit!=tokens.end(); sit++)
+        {
+                *sit = trim_head_tail(*sit, " \t\r\n");
+        }
+	
         for (int i = 0; i < nIndex; i++)
         {
-            uint32_t rank;
+            uint32_t rank = 0;
             field ftype = pscheme->vIndexs[i];
             string key = tokens[pscheme->vIndexs[i].index];
-            rank = get_incr_rank_pos(key, builder->record_count_map[i]);
-            builder->pRank[i][rank] = lnm;
+	    rank = get_incr_rank_pos(key, pidxmap[i]);
+	    builder->pRank[i][rank] = lnm;
         }
 
         lnm++;
@@ -388,7 +366,6 @@ int create_index(index_builder *builder)
 
     for (int i = 0; i < nIndex; i++)
     {
-        record_index = builder->record_index;
         int ret = output_index_and_data(builder, i);
         if (ret != 0)
         {
@@ -409,10 +386,10 @@ int output_index_and_data(index_builder *builder, int idxnm)
     table *tab = builder->tab;
     string file_prefix = tab->output_table_dir + tab->table_scheme.vIndexs[idxnm].strName ;
 
-    string data_file = file_prefix + ".idx";
-    string index_file = file_prefix + ".dat";
-    string data_file_tmp = data_file + ".tmp";
-    string index_file_tmp = index_file + ".tmp";
+    string index_file = file_prefix + INDEX_SUFFIX;
+    string data_file = file_prefix + DATA_SUFFIX;
+    string data_file_tmp = data_file + TMP_SUFFIX;
+    string index_file_tmp = index_file + TMP_SUFFIX;
 
     ofstream pIndex;
     pIndex.open(index_file_tmp.c_str());
@@ -435,12 +412,12 @@ int output_index_and_data(index_builder *builder, int idxnm)
         return -1;
     }
 
-    char record[102400];
     for (uint32_t ii = 0; ii < tab->file_linenum; ii++)
     {
-        char *raw_record = record_index + prank[ii] * builder->rec_index_size;
-        convert_struct(builder, raw_record, record);
-        pData.write(record, builder->rec_size);
+        memset(builder->record, 0, builder->rec_size);
+	char *raw_record = record_index + prank[ii] * builder->rec_index_size;
+        convert_struct(builder, raw_record, builder->record);
+        pData.write(builder->record, builder->rec_size);
     }
     pData.close();
 
@@ -451,7 +428,7 @@ int output_index_and_data(index_builder *builder, int idxnm)
 
 int get_incr_rank_pos(string key, intCounthashMap &map)
 {
-    uint32_t md5 = get_md5(key);
+    uint64_t md5 = get_md5(key);
     intCounthashMap::iterator it = map.find(md5);
     if (it == map.end())
     {
@@ -470,22 +447,25 @@ int gen_indexs_for_tables(config *tconfig)
     index_builder builder;
     for (vector<table>::iterator it = tconfig->vTables.begin(); it != tconfig->vTables.end(); it++)
     {
-        printf("Function : %s, begin to create indexs for table %s, table scheme: %s, output dir:%s\n",
+        table tab = *it;
+        printf("\nFunction : %s, begin to create indexs for table %s, table scheme: %s, output dir:%s\n",
                __FUNCTION__,
-               it->table_path.c_str(),
-               it->scheme_path.c_str(),
-               it->output_table_dir.c_str());
+               tab.table_path.c_str(),
+               tab.scheme_path.c_str(),
+               tab.output_table_dir.c_str());
 
-        init_index_builder(&builder, &*it);
-        ret = create_index(&builder);
+	ret = init_index_builder(&builder, &tab);
+        printf("init index builder returns %d\n", ret);
+	ret = create_index(&builder);
         if (ret != 0)
         {
             free_index_builder(&builder);
             printf("failed to create index for table %s\n",
-                   it->table_path.c_str());
+                   tab.table_path.c_str());
             return -1;
         }
         free_index_builder(&builder);
+        printf("Function : %s, begin to create indexs for table %s end\n\n", __FUNCTION__, tab.table_path.c_str());
     }
 
     return 0;
@@ -496,8 +476,11 @@ int convert_struct(index_builder *builder, char *raw, char *out)
     table *tab = builder->tab;
     char *p = out;
     int i = 0;
+    const char *pos = builder->str_filter.str_text.c_str();
+    posindex sr;
+    
     vector<field>::iterator it = tab->table_scheme.vFields.begin();
-    for (; it != tab->table_scheme.vFields.end(); it++)
+    for (; it != tab->table_scheme.vFields.end(); it++, i++)
     {
         if (it->type != STRING)
         {
@@ -507,14 +490,11 @@ int convert_struct(index_builder *builder, char *raw, char *out)
         }
         else
         {
-            const char *pos = builder->str_filter.str_text.c_str();
-            posindex sr;
             memcpy(&sr, raw, sizeof(posindex));
-            memcpy(p, pos + sr.start_pos, sr.length);
+	    memcpy(p, pos + sr.start_pos, sr.length);
             raw += sizeof(posindex);
             p += it->max_length;
         }
-        i++;
     }
 
     return 0;
@@ -553,6 +533,8 @@ int main(int argc, char *argv[])
         exit(-1);
     }
 
+    print_config(g_config);
+
     // calculating the loading time
     struct timeval tvStart, tvEnd;
     double linStart = 0, linEnd = 0, lTime = 0;
@@ -570,6 +552,7 @@ int main(int argc, char *argv[])
     linStart = ((double)tvStart.tv_sec * 1000000 + (double)tvStart.tv_usec);  //unit uS
     linEnd = ((double)tvEnd.tv_sec * 1000000 + (double)tvEnd.tv_usec);        //unit uS
     lTime = linEnd - linStart;
+    printf("\n");
     printf("Indexing time is %fs\n", lTime / 1e6);
 
     delete g_config;

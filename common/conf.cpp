@@ -2,6 +2,8 @@
 #include "util.h"
 #include <algorithm>
 
+#define DEFAULT_MAX_STRINGLEN 255
+
 config *g_config = NULL;
 
 int init_scheme_field_type(map<string, int> &mfields)
@@ -11,6 +13,18 @@ int init_scheme_field_type(map<string, int> &mfields)
     mfields["float"] = FLOAT;
     mfields["double"] = DOUBLE;
     return 0;
+}
+
+static string normalize_dir(const string &str)
+{
+    string newstr = "";
+    int len = str.length();
+    if(str.empty())
+        return newstr;
+    newstr = str;
+    if(str[len-1]!='/')
+        newstr += "/";
+    return newstr;
 }
 
 int parse_scheme(string scheme_path, scheme &table_scheme)
@@ -33,12 +47,12 @@ int parse_scheme(string scheme_path, scheme &table_scheme)
     m_config.clear();
     while (getline(in, line))
     {
-        if (line.empty())
+        line = trim(line, "\t \r\n");
+        if (line[0] == '#')
         {
             continue;
         }
-        line = trim(line, "\t ", false);
-        if (line[0] == '#')
+        if (line.empty())
         {
             continue;
         }
@@ -94,6 +108,7 @@ int parse_scheme(string scheme_path, scheme &table_scheme)
             cerr << "the wrong format scheme " << *vit << endl;
             return -1;
         }
+        tmpfield.is_index = 0;
         tmpfield.strName = tmptokens[0];
         mit = mfields.find(tmptokens[1]);
         if (mit == mfields.end())
@@ -106,17 +121,20 @@ int parse_scheme(string scheme_path, scheme &table_scheme)
         {
             if (tmptokens.size() != 3)
             {
-                cerr << "string type must has 3 fields. " << endl;
-                return -1;
+                cerr << "string type has 3 fields." << endl;
+                cerr << "the max string length is the default value." << endl;
+                tmpfield.max_length = DEFAULT_MAX_STRINGLEN;
             }
-            tmpfield.max_length = atoi(tmptokens[2].c_str());
+            else
+		tmpfield.max_length = atoi(tmptokens[2].c_str());
         }
         tmpfield.index = index++;
 
         if (find(idxtokens.begin(), idxtokens.end(), tmpfield.strName) != idxtokens.end())
         {
-            table_scheme.vIndexs.push_back(tmpfield);
-        }
+            tmpfield.is_index = 1;
+	    table_scheme.vIndexs.push_back(tmpfield);
+        } 
         table_scheme.vFields.push_back(tmpfield);
         table_scheme.mFields[tmpfield.strName] = tmpfield;
     }
@@ -132,8 +150,8 @@ int parse_table(string tab, config *g_config, table &tabitem)
     map<string, string>::iterator it;
 
     value_table_path = g_config->input_dir + tab;
-    value_scheme_path = g_config->input_dir + tab + ".scheme";
-    value_output_table_dir = g_config->output_dir + tab;
+    value_scheme_path = g_config->input_dir + tab + ".schema";
+    value_output_table_dir = normalize_dir(g_config->output_dir + tab);
 
     if (!file_exist(value_table_path.c_str()))
     {
@@ -167,6 +185,7 @@ int parse_table(string tab, config *g_config, table &tabitem)
 
     tabitem.table_scheme = table_scheme;
     tabitem.index_num = table_scheme.vIndexs.size();
+    tabitem.field_num = table_scheme.vFields.size();
     tabitem.file_linenum = getlinenum(tabitem.table_path);
     return 0;
 }
@@ -175,7 +194,7 @@ int parse_tables(config *g_config)
 {
     table tabitem;
     string strTab = g_config->tables;
-    strTab = trim(strTab, "\t ");
+    strTab = trim(strTab, "\t \r\n");
 
     vector<string> vStrTabs = parse_string(strTab, ";");
     if (vStrTabs.size() == 0)
@@ -202,6 +221,7 @@ int parse_conf(const char *file)
     map<string, string>::iterator it;
     string line;
 
+    printf("begin to parse file : %s\n", file);
     g_config = new config;
     if (!g_config)
     {
@@ -220,12 +240,12 @@ int parse_conf(const char *file)
     m_config.clear();
     while (getline(in, line))
     {
-        if (line.empty())
+        line = trim(line, "\t \r\n");
+	if (line[0] == '#')
         {
             continue;
         }
-        line = trim(line, "\t ");
-        if (line[0] == '#')
+        if (line.empty())
         {
             continue;
         }
@@ -259,6 +279,10 @@ int parse_conf(const char *file)
     SET_VALUE(output_dir);
     SET_VALUE(tables);
 
+    g_config->input_dir = normalize_dir(g_config->input_dir);
+    g_config->output_dir = normalize_dir(g_config->output_dir);
+
+    printf("begin to parse table\n");
     if (parse_tables(g_config) != 0 || g_config->vTables.empty())
     {
         printf("parse config tables failed\n");
@@ -267,5 +291,116 @@ int parse_conf(const char *file)
     }
 
     return 0;
+}
+
+void print_field(field item, int isindex)
+{
+	string dbg = "field";
+	string strtype[4] = { "INT","STRING","FLOAT","DOUBLE" };
+
+	if(isindex)
+	{
+		dbg = "index";
+	}
+	
+	cout << "----------" << dbg <<" information begin----------" << endl;
+	cout << "field name : " << item.strName << endl;
+	cout << "field type : " << strtype[item.type] << endl;
+	if(item.type==STRING)
+	{
+		cout << "field max length : " << item.max_length << endl;
+	}
+	cout << "field index : " << item.index << endl;
+	cout << "field is index : " << item.is_index << endl; 
+        cout << "----------" << dbg <<" information end----------" << endl;	
+}
+
+void print_schema(scheme item)
+{
+	int i = 1;	
+	cout << "----------schema information begin----------" << endl;
+	cout << "separator : " << item.sep << endl;
+	cout << "index info" << endl;
+	for(vector<field>::iterator it=item.vIndexs.begin();
+		it!=item.vIndexs.end(); it++, i++)
+	{
+		cout << "The " << i << " index's config :" << endl;
+		print_field(*it, 1);
+	}
+	i = 1;
+	cout << "fields info" << endl;
+	for(vector<field>::iterator it=item.vFields.begin();
+		it!=item.vFields.end(); it++, i++)
+	{
+		cout << "The " << i << " field's config :" << endl;
+		print_field(*it, 0);
+	}
+	cout << "----------schema information end----------" << endl;
+}
+
+void print_table(table tab)
+{
+	cout << "----------table information begin----------" << endl;
+	cout << "table name : " << tab.table_name << endl;
+	cout << "file line number : " << tab.file_linenum << endl;
+	cout << "index number : " << tab.index_num << endl;
+	cout << "field number : " << tab.field_num << endl;
+	cout << "table path : " << tab.table_path << endl;
+	cout << "scheme_path : " << tab.scheme_path << endl;
+	cout << "output table directory : " << tab.output_table_dir << endl;
+	print_schema(tab.table_scheme);
+	cout << "----------table information end----------" << endl;
+}
+
+void print_config(config *pconfig)
+{
+	int i = 1;
+
+	cout << "----------config information begin----------" << endl;
+	cout << "config file : " << pconfig->config_file << endl;
+	cout << "input dir : " << pconfig->input_dir << endl;
+	cout << "ouput dir : " << pconfig->output_dir << endl;
+	cout << "tables : " << pconfig->tables << endl;
+	cout << endl;
+		
+	for(vector<table>::iterator it = pconfig->vTables.begin();
+		it!=pconfig->vTables.end(); it++, i++)
+	{
+		cout << "The " << i << " table's config :" << endl;
+		print_table(*it);
+		cout << endl;
+	}
+	cout << "----------config information end----------" << endl;	
+}
+
+int get_max_record_size(table *tab)
+{
+    int rec_size = 0, tmp = 0;
+    vector<field> *p = &tab->table_scheme.vFields;
+    for (vector<field>::iterator it = p->begin(); it != p->end(); it++)
+    {
+        if (it->type == INT)
+        {
+            tmp = sizeof(uint32_t);
+        }
+        else if (it->type == STRING)
+        {
+            tmp = it->max_length;
+        }
+        else if (it->type == FLOAT)
+        {
+            tmp = sizeof(float);
+        }
+        else if (it->type == DOUBLE)
+        {
+            tmp = sizeof(double);
+        }
+        else
+        {
+            return -1;
+        }
+        rec_size += tmp;
+    }
+    return rec_size;
 }
 

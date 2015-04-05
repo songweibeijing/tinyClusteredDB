@@ -25,8 +25,8 @@ AC_CHECK_PROG(HAVE_MAN2HTML,man2html,yes)
 AM_PROG_CC_C_O
 
 AC_MSG_CHECKING([check for debug compilation])
-CFLAGS="-g -O2 -I./inc"
-CXXFLAGS="-g -O2 -I./inc"
+CFLAGS="-g -O -I./inc"
+CXXFLAGS="-g -O -I./inc"
 
 AC_MSG_CHECKING([uname -m for detecting host operating system architecture])
 ARCH=`uname -m`

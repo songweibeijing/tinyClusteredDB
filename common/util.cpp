@@ -1,101 +1,75 @@
 #include "util.h"
 #include "md5.h"
 
-string trimleft(const string &sStr, const string &s, bool bChar)
+static int delstr(char *str, const char *delchs)
 {
-    if (sStr.empty())
+    int size = strlen(str);
+    int span = 0;
+    for (int i = 0; i < size;)
     {
-        return sStr;
-    }
-
-    if (!bChar)
-    {
-        if (sStr.length() < s.length())
-        {
-            return sStr;
+	if (strchr(delchs, str[i]) != NULL)
+	{
+	    span++;
+  	    i++;
+	    continue;
         }
-
-        if (sStr.compare(0, s.length(), s) == 0)
-        {
-            return sStr.substr(s.length());
-        }
-
-        return sStr;
+	else if (span > 0)
+	{
+	    str[i - span] = str[i];
+	    i++;
+	}
+	else
+	{
+	    i++;
+	    continue;
+	}
     }
-
-    string::size_type pos = 0;
-    while (pos < sStr.length())
+    for (int i = size - span; i < size; i++)
     {
-        if (s.find_first_of(sStr[pos]) == string::npos)
-        {
-            break;
-        }
-
-        pos++;
+	str[i] = '\0';
     }
-
-    if (pos == 0)
-    {
-        return sStr;
-    }
-
-    return sStr.substr(pos);
+    return size - span;
 }
 
-string trimright(const string &sStr, const string &s, bool bChar)
+
+string trim_head_tail(const string &sStr, const string &s)
 {
+    string retstr = "";
     if (sStr.empty())
     {
         return sStr;
     }
 
-    if (!bChar)
+    size_t first = sStr.find_first_not_of(s);
+    if (first==std::string::npos)
     {
-        if (sStr.length() < s.length())
-        {
-            return sStr;
-        }
-
-        if (sStr.compare(sStr.length() - s.length(), s.length(), s) == 0)
-        {
-            return sStr.substr(0, sStr.length() - s.length());
-        }
-
-        return sStr;
+  	first = 0;
     }
-
-    string::size_type pos = sStr.length();
-    while (pos != 0)
+    size_t last = sStr.find_last_not_of(s);
+    if (last==std::string::npos)
     {
-        if (s.find_first_of(sStr[pos - 1]) == string::npos)
-        {
-            break;
-        }
-
-        pos--;
+        last = sStr.length();
     }
-
-    if (pos == sStr.length())
-    {
-        return sStr;
-    }
-
-    return sStr.substr(0, pos);
+    retstr = string(sStr, first, last-first+1);
+    return retstr; 
 }
 
-string trim(const string &sStr, const string &s, bool bChar)
+string trim(const string &sStr, const string &s)
 {
+    string retstr = "";
     if (sStr.empty())
     {
         return sStr;
     }
-
-    if (!bChar)
-    {
-        return trimright(trimleft(sStr, s, false), s, false);
-    }
-
-    return trimright(trimleft(sStr, s, true), s, true);
+    
+    char * pbuf = (char *)calloc(1, sStr.length()+1);
+    if(pbuf==NULL)
+    	return "";
+    memcpy(pbuf, sStr.c_str(), sStr.length());
+    int size = delstr(pbuf, s.c_str());
+    retstr = string(pbuf, size);
+    free(pbuf);
+    return retstr;
 }
 
 int file_size(const char *path)
@@ -222,7 +196,6 @@ uint32_t getlinenum(string file)
     {
         linenum++;
     }
-    cerr << "Num: " << linenum << endl;
     in.close();
 
     return linenum;
@@ -237,7 +210,7 @@ int string2int32(string key)
     return value;
 }
 
-int string2uint32(string key)
+uint32_t string2uint32(string key)
 {
     uint32_t value;
     stringstream  buffer;
@@ -246,7 +219,7 @@ int string2uint32(string key)
     return value;
 }
 
-int string2int64(string key)
+int64_t string2int64(string key)
 {
     int64_t value;
     stringstream  buffer;
@@ -255,7 +228,7 @@ int string2int64(string key)
     return value;
 }
 
-int string2uint64(string key)
+uint64_t string2uint64(string key)
 {
     uint64_t value;
     stringstream  buffer;
@@ -264,7 +237,7 @@ int string2uint64(string key)
     return value;
 }
 
-int string2float(string key)
+float string2float(string key)
 {
     float ret;
     stringstream  buffer;
@@ -273,7 +246,7 @@ int string2float(string key)
     return ret;
 }
 
-int string2double(string key)
+double string2double(string key)
 {
     double ret;
     stringstream  buffer;

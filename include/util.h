@@ -16,9 +16,8 @@
 
 using namespace std;
 
-string trimleft(const string &sStr, const string &s, bool bChar);
-string trimright(const string &sStr, const string &s, bool bChar);
-string trim(const string &sStr, const string &s, bool bChar = false);
+string trim_head_tail(const string &sStr, const string &s);
+string trim(const string &sStr, const string &s);
 int file_size(const char *path);
 int file_exist(const char *path);
 int mkdir_recursive(const char *pathname, mode_t mode);
@@ -27,11 +26,11 @@ int mkdir_recursive(const char *pathname, mode_t mode);
 vector<string> parse_string(const string &src, string tok, bool trim = true, string null_subst = "");
 uint32_t getlinenum(string file);
 int string2int32(string key);
-int string2uint32(string key);
-int string2int64(string key);
-int string2uint64(string key);
-int string2float(string key);
-int string2double(string key);
+uint32_t string2uint32(string key);
+int64_t string2int64(string key);
+uint64_t string2uint64(string key);
+float string2float(string key);
+double string2double(string key);
 string uint322string(uint32_t key);
 string float2string(float key);
 string double2string(double key);

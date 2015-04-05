@@ -1,0 +1,5 @@
+#schema for test1 table
+
+table_index: deptid, deptname, deptcost
+table_separator: |
+table_fields: deptid,int | deptname,string,255 | deptcost, float | deptsalary, double | deptdesc, string, 255

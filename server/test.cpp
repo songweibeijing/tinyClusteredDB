@@ -26,15 +26,6 @@ typedef struct queryfilter
     field    field_info;
 } queryfilter;
 
-
-typedef struct query
-{
-        string field_name;
-        string value;
-}query;
-
-static int valid_raw_record(const vector<query> &vmap, const string &tabname, char *precord, int rec_size);
-
 int init_field_index(tab_index_loader *ploader, string fieldname)
 {
     uint64_t md5;
@@ -44,7 +35,6 @@ int init_field_index(tab_index_loader *ploader, string fieldname)
     intIndexhashMap *pindex = ploader->indexs + idxinfo.hash_index;
     string index_file = idxinfo.index_file_path;
 
-    cout << "begin to load index file " << index_file << endl;
     ifstream in(index_file);
     if (!in)
     {
@@ -55,22 +45,19 @@ int init_field_index(tab_index_loader *ploader, string fieldname)
     while (getline(in, line))
     {
         posindex idxrec;
-        line = trim(line, "\r\n");
         vector<string> tokens = parse_string(line, "\t");
         if (tokens.size() == 0 || (int)tokens.size() != 3)
         {
             cerr << "wrong input " << line << endl;
             continue;
         }
-        cout << tokens[0] << "|" << tokens[1] << "|" << tokens[2] << endl;
-        md5 = string2uint64(tokens[0]);
         idxrec.start_pos = string2uint64(tokens[1]);
         idxrec.length = string2uint32(tokens[2]);
+        md5 = get_md5(tokens[0]);
         pindex->insert(make_pair(md5, idxrec));
     }
     in.close();
-    cout << "end to load index file." << endl;
-    
+
     return 0;
 }
 
@@ -79,11 +66,11 @@ int init_table_index(index_loaders *ptabloader, config *pconfig, int idx)
     int i = 0, ret = 0;
     index_info idxinfo;
     table tab = pconfig->vTables[idx];
-    int index_num = tab.index_num;
+    int field_num = tab.index_num;
 
     tab_index_loader *ploader = ptabloader->loaders + idx;
-    ploader->index_num = index_num;
-    ploader->indexs = new intIndexhashMap[index_num];
+    ploader->index_num = field_num;
+    ploader->indexs = new intIndexhashMap[field_num];
     if (!ploader->indexs)
     {
         cout << "failed to new tab_index_loader" << endl;
@@ -97,8 +84,8 @@ int init_table_index(index_loaders *ptabloader, config *pconfig, int idx)
         idxinfo.tabname = tab.table_name;
         idxinfo.fieldinfo = *it;
         idxinfo.hash_index = i;
-        idxinfo.index_file_path = file_prefix + INDEX_SUFFIX;
-        idxinfo.data_file_path = file_prefix + DATA_SUFFIX;
+        idxinfo.index_file_path = file_prefix + ".idx";
+        idxinfo.data_file_path = file_prefix + ".dat";
         ploader->fieldinfo_map[it->strName] = idxinfo;
         ret = init_field_index(ploader, it->strName);
         if (ret != 0)
@@ -164,6 +151,37 @@ void usage()
     printf("\t-f\t the configuration file\n");
 }
 
+int get_max_record_size(table *tab)
+{
+    int rec_size = 0, tmp = 0;
+    vector<field> *p = &tab->table_scheme.vFields;
+    for (vector<field>::iterator it = p->begin(); it != p->end(); it++)
+    {
+        if (it->type == INT)
+        {
+            tmp = sizeof(uint32_t);
+        }
+        else if (it->type == STRING)
+        {
+            tmp = it->max_length;
+        }
+        else if (it->type == FLOAT)
+        {
+            tmp = sizeof(float);
+        }
+        else if (it->type == DOUBLE)
+        {
+            tmp = sizeof(double);
+        }
+        else
+        {
+            return -1;
+        }
+        rec_size += tmp;
+    }
+    return rec_size;
+}
+
 int find_table(const vector<table> &vtabs, string tablename)
 {
     int i = 0;
@@ -178,64 +196,33 @@ int find_table(const vector<table> &vtabs, string tablename)
     return -1;
 }
 
-vector<string> get_data(vector<query> querys, index_info idxinfo, uint64_t startpos, uint32_t nrec)
+char *get_raw_data(string datafile, uint32_t rec_size, uint64_t startpos, uint32_t nrec)
 {
-    vector<string> validrec;
-    validrec.clear();
-
-    int tabidx = find_table(g_config->vTables, idxinfo.tabname);
-    if (tabidx == -1)
-    {
-        return validrec;
-    }
-
-    int rec_size = get_max_record_size(&g_config->vTables[tabidx]);
-    string datafile = idxinfo.data_file_path;
-    char *buffer=NULL, *tmp = NULL;
+    char *buffer = NULL;
     FILE *pData = fopen(datafile.c_str(), "r");
-    if (pData == NULL)
+    if (pData != NULL)
     {
- 	cout << "failed to open file : " << datafile << endl;
- 	return validrec;
-    }
-    fseek(pData, startpos * rec_size, SEEK_SET);
-    buffer = (char *)calloc(nrec, rec_size);
-    if (!buffer)
-    {
-        fclose(pData);
-        return validrec;
-    }
-    fread(buffer, rec_size, nrec, pData);
-    fclose(pData);
- 
-    tmp = buffer; 
-    for (uint32_t i = 0; i < nrec; i++)
-    {
-        if (valid_raw_record(querys, idxinfo.tabname ,buffer, rec_size))
+        fseek(pData, startpos * rec_size, SEEK_SET);
+        buffer = (char *)calloc(nrec, rec_size);
+        if (!buffer)
         {
-		string str = string(buffer, rec_size);
-		validrec.push_back(str);
+            fclose(pData);
+            return NULL;
         }
-        buffer += rec_size;
+        fread(buffer, rec_size, nrec, pData);
+        fclose(pData);
     }
-    
-    free(tmp);
-    return validrec;
+    return NULL;
 }
 
-static uint32_t get_pos(const string &tabname, const string &field_name)
+static uint32_t get_pos(const table &tab, int nfileds)
 {
     int i = 0;
     uint32_t pos = 0;
-    table tab = g_config->mTables[tabname];
     vector<field> vFields = tab.table_scheme.vFields;
-
     for (vector<field>::iterator it = vFields.begin();
-         it != vFields.end(); it++)
+         it != vFields.end() && i < nfileds; it++)
     {
-	if(it->strName==field_name)
-		break;	
-
         if (it->type == INT)
         {
             pos += sizeof(uint32_t);
@@ -256,17 +243,15 @@ static uint32_t get_pos(const string &tabname, const string &field_name)
     return pos;
 }
 
-static int valid_raw_record(const vector<query> &vmap, const string &tabname, char *precord, int rec_size)
+static int valid_raw_record(const table &tab, char *precord, int rec_size, const vector<queryfilter> &vmap)
 {
     uint32_t pos;
-    table tab = g_config->mTables[tabname];
-    
-    for (vector<query>::const_iterator it = vmap.begin(); it != vmap.end(); it++)
+    for (vector<queryfilter>::const_iterator it = vmap.begin(); it != vmap.end(); it++)
     {
-        query qf = *it;
-        pos = get_pos(tabname, qf.field_name);
-        field fieldinfo = tab.table_scheme.mFields[qf.field_name];
-        if (fieldinfo.type == INT)
+        queryfilter qf = *it;
+        pos = get_pos(tab, qf.field_info.index);
+
+        if (qf.field_info.type == INT)
         {
             uint32_t value, value2;
             memcpy(&value, precord + pos, sizeof(uint32_t));
@@ -276,17 +261,14 @@ static int valid_raw_record(const vector<query> &vmap, const string &tabname, ch
                 return 0;
             }
         }
-        else if (fieldinfo.type == STRING)
+        else if (qf.field_info.type == STRING)
         {
-            char buff[1024] = {0};
-	    memcpy(buff, precord + pos, fieldinfo.max_length);
-            if (memcmp(qf.value.c_str(), buff, strlen(buff)))
+            if (memcmp(qf.value.c_str(), precord + pos, qf.field_info.max_length))
             {
-                cout << "not e" << endl;
-	        return 0;
+                return 0;
             }
         }
-        else if (fieldinfo.type == FLOAT)
+        else if (qf.field_info.type == FLOAT)
         {
             float value, value2;
             memcpy(&value, precord + pos, sizeof(float));
@@ -296,7 +278,7 @@ static int valid_raw_record(const vector<query> &vmap, const string &tabname, ch
                 return 0;
             }
         }
-        else if (fieldinfo.type == DOUBLE)
+        else if (qf.field_info.type == DOUBLE)
         {
             double value, value2;
             memcpy(&value, precord + pos, sizeof(double));
@@ -325,127 +307,23 @@ static int get_field_index(table &tab, Request &req, vector<queryfilter> &vmap)
     return 0;
 }
 
-static void print_records(const string &tabname, vector<string> &records)
+static int filter_raw_data(table &ptab, char *praw, int rec_size, int num, Request &req, uint32_t *pmap)
 {
-    table tab = g_config->mTables[tabname];
-    vector<field> vFields = tab.table_scheme.vFields;
-    int pos = 0;
-    const char *p = NULL;
+    char *precord = praw;
+    int i = 0, valid_record = 0;
+    vector<queryfilter> vmap;
+    vmap.clear();
 
-    for(vector<string>::iterator it=records.begin(); it!=records.end(); it++)
+    get_field_index(ptab, req, vmap);
+    for (i = 0; i < num; i++)
     {
-	string str = *it;
-        p = str.c_str();
-	pos = 0;
-    	for (size_t i = 0; i < vFields.size(); i++)
-    	{
-                string strvalue = "";
-                if (vFields[i].type == INT)
-                {
-                    uint32_t value;
-                    memcpy(&value, p + pos, sizeof(uint32_t));
-                    p += sizeof(uint32_t);
-		    cout << value << " | ";
-                }
-                else if (vFields[i].type == STRING)
-                {
-		    strvalue = string(p, vFields[i].max_length);
-                    p += vFields[i].max_length;
-		    cout << strvalue << " | ";
-                }
-                else if (vFields[i].type == FLOAT)
-                {
-                    float value;
-                    memcpy(&value, p, sizeof(float));
-                    p += sizeof(float);
-                    cout << value << " | ";
-		}
-                else if (vFields[i].type == DOUBLE)
-                {
-                    double value;
-                    memcpy(&value, p, sizeof(double));
-                    p += sizeof(double);
-                    cout << value << " | ";
-		}
-        }
-	cout << endl;
-    }
-}
-
-static char *get_results(const string &tabname, vector<query> &vmap, int &resplen)
-{
-    uint64_t min_index_records = 0xffffffff; //the index which contains min records.
-    index_info min_index_info;
-    uint64_t start_pos = 0;
-    int found = 0;
- 
-    resplen = 0;
-
-    int tabidx = find_table(g_config->vTables, tabname);
-    if (tabidx == -1)
-    {
-        return NULL;
-    }
-
-    if(vmap.size()==0)
-	return NULL;
-
-    strInthashMap::iterator it_tab;
-    strIdxInfohashMap::iterator it_idx;
-    intIndexhashMap::iterator it_record;
-
-    it_tab = loader.tabname_map.find(tabname);
-    if (it_tab == loader.tabname_map.end())
-    {
-        cout << "wrong table name : " << tabname << endl;
-        return NULL;
-    }
-
-    tab_index_loader *ptab = loader.loaders + it_tab->second;
-    for (vector<query>::iterator it_field=vmap.begin(); it_field!=vmap.end(); it_field++)
-    {
-        string name = it_field->field_name;
-        string value = it_field->value;
-        uint64_t md5 = get_md5(value);
-        it_idx = ptab->fieldinfo_map.find(name);
-        if (it_idx == ptab->fieldinfo_map.end())
+        if (valid_raw_record(ptab, precord, rec_size, vmap))
         {
-            cout << "can't find field : " << name << endl;
-            continue;
+            pmap[valid_record++] = i;
         }
-        
-        index_info idxinfo = it_idx->second;
-        it_record = ptab->indexs[idxinfo.hash_index].find(md5);
-        if (it_record == ptab->indexs[idxinfo.hash_index].end())
-        {
-            cout << "can not find it." << endl;
-            return NULL;
-        }
-
-        if (min_index_records > it_record->second.length)
-        {
-            min_index_records = it_record->second.length;
-            min_index_info = idxinfo;
-            start_pos = it_record->second.start_pos;
-        }
-	found = 1;
+        precord += rec_size;
     }
-
-    if(found==0)
-    {
-    	cout << "can not find any records" << endl;
-	return NULL;
-    }
-
-    vector<string> records = get_data(vmap, min_index_info, start_pos, min_index_records);
-    if(records.empty())
-    {
-	cout << "no records" << endl;
-	return NULL;
-    }
-    
-    print_records(tabname, records);
-    return NULL;	
+    return valid_record;
 }
 
 static int get_query_results(char *reqbuf, int reqlen, char **respbuf, int *resplen)
@@ -472,7 +350,7 @@ static int get_query_results(char *reqbuf, int reqlen, char **respbuf, int *resp
         return -1;
     }
 
-/*    table = req.tablename();
+    table = req.tablename();
     it = loader.tabname_map.find(table);
     if (it != loader.tabname_map.end())
     {
@@ -585,7 +463,7 @@ static int get_query_results(char *reqbuf, int reqlen, char **respbuf, int *resp
         resp.SerializeToArray(*respbuf + sizeof(head), *resplen - sizeof(head));
         delete [] pmap;
     }
-*/
+
     return 0;
 }
 
@@ -644,7 +522,7 @@ int init_server()
     char udp_path[256] = "/tmp/2222";
     server_param param;
 
-    g_servers = get_servers();
+    servers_array *g_servers = get_servers();
     if (g_servers == NULL)
     {
         printf("get_servers error\n");
@@ -686,11 +564,6 @@ int main(int argc, char *argv[])
     int c, ret = -1;
     char *configfile = NULL;
 
-    int resplen = 0;
-    vector<query> vmap;
-    vmap.clear();
-    query item;
-    
     /* process arguments */
     while (-1 != (c = getopt(argc, argv, "f:")))
     {
@@ -720,96 +593,23 @@ int main(int argc, char *argv[])
     }
 
     print_config(g_config);
-   
-    cout << endl;
-    cout << "begin to load table index" << endl; 
+    
     ret = init_tables_index(&loader, g_config);
     if (ret != 0)
     {
         cout << "failed to load index" << endl;
         goto failed;
     }
-    cout << "end to load table index" << endl;
 
-    cout << "deptid==1" << endl;
-    item.field_name = "deptid";  
-    item.value = "1";
-    vmap.push_back(item);
-    item.field_name = "deptcost";
-    item.value = "18888.5";
-    vmap.push_back(item);
-    get_results("test1", vmap, resplen);
-    cout << endl;
- 
-    cout << "deptname=cs" << endl;
-    vmap.clear();
-    item.field_name = "deptname"; 
-    item.value = "cs";
-    vmap.push_back(item);
-    get_results("test1", vmap, resplen);
-    cout << endl;
-    
-    cout << "deptname=cs && deptcost=87888" << endl;
-    vmap.clear();
-    item.field_name = "deptname"; 
-    item.value = "cs";
-    vmap.push_back(item);
-    item.field_name = "deptcost";
-    item.value = "87888";
-    vmap.push_back(item);
-    get_results("test1", vmap, resplen);
-    cout << endl;
-
-    cout << "deptname=ee && deptcost=9328" << endl;
-    vmap.clear();
-    item.field_name = "deptcost";
-    item.value = "9328";
-    vmap.push_back(item);
-    item.field_name = "deptname";
-    item.value = "ee";
-    vmap.push_back(item);
-    get_results("test1", vmap, resplen);
-    cout << endl;
-
-    cout << "id=1" << endl;
-    vmap.clear();
-    item.field_name = "id"; 
-    item.value = "1";
-    vmap.push_back(item);
-    get_results("test2", vmap, resplen);
-    cout << endl;
-
-    cout << "id=2&&name=judy" << endl;
-    vmap.clear();
-    item.field_name = "id";
-    item.value = "2";
-    vmap.push_back(item);
-    item.field_name = "name";
-    item.value = "judy";
-    vmap.push_back(item);
-    get_results("test2", vmap, resplen);
-    cout << endl;
-
-    cout << "score=100" << endl;
-    vmap.clear();
-    item.field_name = "score";    
-    item.value = "100";
-    vmap.push_back(item);
-    get_results("test2", vmap, resplen);
-    cout << endl;
-    
     //init network settings
-    cout << "begin to init server" << endl;
     if (init_server() != 0)
     {
         cout << "failed to load index" << endl;
         goto failed;
     }
-    cout << "end to init server" << endl;
 
-    cout << "begin to loop" << endl; 
+    //main loop
     start_servers_array_loop(g_servers);
-    cout << "end to loop" << endl;
 
 failed:
     if (g_servers)
